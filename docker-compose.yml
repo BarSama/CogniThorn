@@ -1,0 +1,170 @@
+version: "3.9"
+
+x-common-env: &common-env
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://cognithhorn:changeme@pgbouncer:5432/cognithhorn}
+  REDIS_SENTINEL_HOSTS: redis-sentinel:26379
+  REDIS_MASTER_NAME: mymaster
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+  GITHUB_REPO: ${GITHUB_REPO:-}
+  UPSTREAM_URL: ${UPSTREAM_URL:-http://upstream:80}
+  CONTROL_PLANE_URL: http://control-plane:8090
+  SENSITIVITY_THRESHOLD: ${SENSITIVITY_THRESHOLD:-0.7}
+  ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+services:
+
+  # ── PostgreSQL HA ────────────────────────────────────────────────────────
+  postgres-primary:
+    image: citusdata/pg_auto_failover:v2.1
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_USER: ${POSTGRES_USER:-cognithhorn}
+      POSTGRES_DB: ${POSTGRES_DB:-cognithhorn}
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - postgres_primary_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cognithhorn}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  postgres-standby:
+    image: citusdata/pg_auto_failover:v2.1
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_USER: ${POSTGRES_USER:-cognithhorn}
+      PGDATA: /var/lib/postgresql/data
+      PG_AUTOCTL_MONITOR: postgres://autoctl_node@postgres-primary/pg_auto_failover
+    volumes:
+      - postgres_standby_data:/var/lib/postgresql/data
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    restart: unless-stopped
+
+  pgbouncer:
+    image: pgbouncer/pgbouncer:1.22.1
+    environment:
+      DATABASES_HOST: postgres-primary
+      DATABASES_PORT: 5432
+      DATABASES_DBNAME: ${POSTGRES_DB:-cognithhorn}
+      DATABASES_USER: ${POSTGRES_USER:-cognithhorn}
+      DATABASES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_MAX_CLIENT_CONN: 200
+      PGBOUNCER_DEFAULT_POOL_SIZE: 20
+    ports:
+      - "5432:5432"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Redis Sentinel HA ────────────────────────────────────────────────────
+  redis-master:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+    volumes:
+      - redis_master_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis-replica:
+    image: redis:7-alpine
+    command: >
+      redis-server --appendonly yes
+      --replicaof redis-master 6379
+      --requirepass ${REDIS_PASSWORD:-}
+      --masterauth ${REDIS_PASSWORD:-}
+    volumes:
+      - redis_replica_data:/data
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis-sentinel:
+    image: redis:7-alpine
+    command: >
+      sh -c "echo 'sentinel monitor mymaster redis-master 6379 1
+      sentinel down-after-milliseconds mymaster 5000
+      sentinel failover-timeout mymaster 10000
+      sentinel parallel-syncs mymaster 1' > /sentinel.conf
+      && redis-sentinel /sentinel.conf"
+    depends_on:
+      - redis-master
+      - redis-replica
+    restart: unless-stopped
+
+  # ── SSL Gateway ──────────────────────────────────────────────────────────
+  ssl-gateway:
+    build:
+      context: .
+      dockerfile: ssl_gateway/Dockerfile
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - certs_data:/certs
+    environment:
+      <<: *common-env
+    depends_on:
+      - redis-master
+      - pgbouncer
+    restart: unless-stopped
+    mem_limit: 256m
+
+  # ── Control Plane ────────────────────────────────────────────────────────
+  control-plane:
+    build:
+      context: .
+      dockerfile: control_plane/Dockerfile
+    ports:
+      - "8090:8090"
+      - "8501:8501"
+    environment:
+      <<: *common-env
+    depends_on:
+      - pgbouncer
+      - redis-master
+    restart: unless-stopped
+    mem_limit: 512m
+    deploy:
+      replicas: 1  # increase to 2 for HA (requires a load balancer in front)
+
+  # ── WAF Workers (Data Plane) ─────────────────────────────────────────────
+  waf-worker:
+    build:
+      context: .
+      dockerfile: data_plane/Dockerfile
+    expose:
+      - "9000"
+    volumes:
+      - models_data:/app/models
+    environment:
+      <<: *common-env
+      WORKER_PORT: 9000
+    depends_on:
+      - pgbouncer
+      - redis-master
+      - control-plane
+    restart: unless-stopped
+    mem_limit: 512m
+    deploy:
+      replicas: 2  # scale: docker compose up --scale waf-worker=N
+
+volumes:
+  postgres_primary_data:
+  postgres_standby_data:
+  redis_master_data:
+  redis_replica_data:
+  certs_data:
+  models_data:
