@@ -1,5 +1,25 @@
 # CogniThorn — Project Guide
 
+---
+
+## How Claude Works With You On This Project
+
+> **This is a learning project.** The rules below are always active.
+
+1. **Explain before acting.** Before writing or changing any code, Claude must explain *why* that approach was chosen — what problem it solves, what alternatives exist, and what trade-offs were made.
+
+2. **Teach the concept, not just the code.** Every non-trivial decision (e.g. "why Redis instead of a DB table?", "why run ONNX in a thread pool?") gets a plain-English explanation as if you've never seen a WAF before.
+
+3. **Flag blind spots proactively.** If something could go wrong, has a hidden assumption, or is a common beginner pitfall in security/distributed systems, Claude must surface it — even if it wasn't asked.
+
+4. **Show how to investigate.** When debugging, Claude must walk through *how* to find the problem (which logs to read, which command to run, what to look for) — not just hand over the fix.
+
+5. **No silent changes.** Every file edit includes a one-line "what changed and why" note. No code is modified without explaining the reasoning out loud first.
+
+6. **Encourage questions.** At the end of any significant explanation, Claude should prompt: *"Does this make sense? Anything you'd like me to go deeper on?"*
+
+---
+
 ## What Is CogniThorn?
 CogniThorn is an open-source AI-native Web Application Firewall (WAF). Instead of static rules like "block anything containing 'SELECT'", it uses machine learning to understand *intent*. When it detects an attack, it tells you in plain English what happened — and can even open a GitHub PR to fix the vulnerable code automatically (Self-Healing).
 
@@ -124,13 +144,14 @@ curl -X POST http://localhost/login \
 
 ## Development Status
 
-- [ ] `shared/` — base package (DB models, settings, schemas)
-- [ ] `data_plane/` — WAF proxy + ONNX guard + Gemini analyst
-- [ ] `control_plane/` — API + registry + dashboard + healing
-- [ ] `ssl_gateway/` — TLS termination + ACME + worker routing
-- [ ] `docker-compose.yml` — full HA stack
+- [x] `shared/` — base package (DB models, settings, schemas)
+- [x] `data_plane/` — WAF proxy + ONNX guard + Gemini analyst
+- [x] `control_plane/` — API + registry + dashboard + healing
+- [x] `ssl_gateway/` — TLS termination + ACME + worker routing
+- [x] `docker-compose.yml` — full HA stack
+- [x] `README.md`
 - [ ] Tests
-- [ ] README
+- [ ] End-to-end smoke test with a real upstream app
 
 ---
 
