@@ -78,18 +78,15 @@ intercept traffic. Phase 2 should add a shared secret for worker registration.
 > attack datasets. Until we validate detection quality, we don't know the false-positive
 > rate. A WAF with 20% false positives is unusable in production.
 
-- [ ] **Benchmark the default model:** Run standard attack datasets (OWASP CRS test suite,
-  SQLMap payloads, XSS polyglots) and measure:
-  - True positive rate (attacks correctly blocked)
-  - False positive rate (legitimate requests incorrectly blocked)
-- [ ] **Fine-tune or replace the model:** Identify a publicly available model trained on
-  WAF/injection datasets (e.g. from HuggingFace security-focused repos)
-- [ ] **Threshold calibration:** The default `0.7` is a guess. Plot a precision/recall curve
-  to find the real optimal threshold for your traffic
-- [ ] **Adversarial testing:** Try payload obfuscation (URL encoding, case variation,
-  comment injection in SQL) to find evasion paths
-- [ ] **False positive baseline:** Run the WAF against a real app's normal traffic and count
-  how many legitimate requests get flagged
+- [x] **Benchmark dataset:** `tests/data/payloads.json` — 65 labeled samples: 15 SQLi (incl. 5 obfuscated), 12 XSS, 8 path traversal, 6 RCE, 14 clean, 10 tricky-clean (false-positive traps)
+- [x] **Benchmark script:** `scripts/benchmark_model.py` — per-attack-type TP/FP breakdown, precision/recall/F1, P50/P95/P99 latency, wrong-prediction list with recommendations
+- [x] **Threshold calibration:** `scripts/calibrate_threshold.py` — sweeps 0.05→0.95, prints full precision/recall/F1 table, highlights best-F1 threshold vs current, warns if attacks score below threshold
+- [x] **Fine-tune pipeline:** `scripts/fine_tune_model.py` — stratified train/eval split, HuggingFace Trainer, exports to ONNX via optimum. Fallback path for CPU-only environments.
+- [x] **Tokenizer tests:** `tests/test_tokenizer.py` — 7 tests verifying injection chars preserved, body truncated at 512, Unicode safety, format stability, different payloads produce different inputs
+- [x] **Model selection documented:** `scripts/download_model.py` — documents distilbert-base-uncased vs jackaduma/SecBERT trade-offs with production recommendation
+- [ ] **Run benchmark** (requires Docker + downloaded model): `docker compose exec waf-worker python scripts/benchmark_model.py`
+- [ ] **Run calibration** (requires Docker + downloaded model): `docker compose exec waf-worker python scripts/calibrate_threshold.py`
+- [ ] **Fine-tune and re-benchmark** if F1 < 0.85
 
 **Key concept — Why ML models need calibration:**
 > A model trained on one dataset may have learned shortcuts (like "anything with the word

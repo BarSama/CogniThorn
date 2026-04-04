@@ -19,6 +19,8 @@ env/
 *.db
 *.sqlite3
 data/
+# Exception: tests/data/ is checked-in source (labeled payload dataset)
+!tests/data/
 
 # Models (large binary files)
 models/*.onnx
