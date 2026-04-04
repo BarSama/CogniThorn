@@ -7,12 +7,13 @@ st.header("🔐 SSL & Domains")
 st.caption("Add domains to protect. CogniThorn will auto-issue Let's Encrypt certificates.")
 
 API_URL = os.getenv("CONTROL_PLANE_URL", "http://localhost:8090")
+_HEADERS = {"X-API-Key": os.getenv("CONTROL_PLANE_API_KEY", "")}
 
 
 @st.cache_data(ttl=10)
 def fetch_domains():
     try:
-        resp = httpx.get(f"{API_URL}/api/domains", timeout=5)
+        resp = httpx.get(f"{API_URL}/api/domains", headers=_HEADERS, timeout=5)
         return resp.json()
     except Exception as e:
         return []
@@ -25,7 +26,11 @@ with st.form("add_domain"):
     submitted = st.form_submit_button("Add & Issue Certificate")
     if submitted and fqdn and upstream:
         try:
-            resp = httpx.post(f"{API_URL}/api/domains", json={"fqdn": fqdn, "upstream_url": upstream}, timeout=10)
+            resp = httpx.post(
+                f"{API_URL}/api/domains",
+                json={"fqdn": fqdn, "upstream_url": upstream},
+                headers=_HEADERS, timeout=10,
+            )
             if resp.status_code == 200:
                 st.success(f"Domain {fqdn} added. Certificate issuance in progress...")
                 st.cache_data.clear()

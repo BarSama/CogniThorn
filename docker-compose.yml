@@ -12,6 +12,13 @@ x-common-env: &common-env
   SENSITIVITY_THRESHOLD: ${SENSITIVITY_THRESHOLD:-0.7}
   ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  # Security: set both of these before going to production.
+  # CONTROL_PLANE_API_KEY: random secret — protects /api/* routes
+  #   generate: openssl rand -hex 32
+  # KEY_ENCRYPTION_SECRET: Fernet key — encrypts TLS private keys at rest
+  #   generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+  CONTROL_PLANE_API_KEY: ${CONTROL_PLANE_API_KEY:-}
+  KEY_ENCRYPTION_SECRET: ${KEY_ENCRYPTION_SECRET:-}
 
 services:
 

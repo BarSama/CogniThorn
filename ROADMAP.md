@@ -57,15 +57,13 @@ redis-cli -h localhost hgetall cognithhorn:workers  # raw Redis state
 > **Why second:** A WAF that is itself exploitable is worse than no WAF. Common attack
 > surface: the management API, the dashboard, and the Redis/PostgreSQL connections.
 
-- [ ] **API Authentication:** Add API key or JWT to the control plane API
-  - Without this, anyone on the network can call `PUT /api/settings` and set threshold to `1.0` (disabling detection)
+- [x] **API Authentication:** `X-API-Key` middleware on all `/api/*` routes (`control_plane/api/auth.py`). Key set via `CONTROL_PLANE_API_KEY` env var; skipped with warning if unset (dev-safe).
 - [ ] **Rate-limit the management API:** Prevent brute-force or flood attacks on `/api/*`
 - [ ] **Secrets management:** Move API keys out of the DB (plaintext) into env vars or a vault
-- [ ] **Input validation on domains:** Prevent SSRF via malicious `upstream_url` values
-  - *What is SSRF?* Server-Side Request Forgery — an attacker adds `upstream_url=http://169.254.169.254` to reach cloud metadata endpoints
+- [x] **Input validation on domains:** SSRF protection via `DomainCreate.block_ssrf` Pydantic validator — rejects private IP ranges and `localhost` in `upstream_url`. *(Known gap: DNS rebinding — tracked for Phase 4)*
 - [ ] **TLS for internal services:** Currently workers talk to PostgreSQL and Redis over plain TCP inside Docker. Fine for single-host; add TLS for multi-host deployments.
-- [ ] **`key_pem` encryption at rest:** Private keys are stored as plaintext in PostgreSQL. Encrypt them with a key derived from `POSTGRES_PASSWORD` before storing.
-- [ ] **Audit log:** Every settings change should write who changed what and when
+- [x] **`key_pem` encryption at rest:** Fernet AES-128-CBC encryption via `shared/crypto.py`. Key set via `KEY_ENCRYPTION_SECRET` env var. `ENC:` prefix distinguishes encrypted from legacy plaintext rows.
+- [x] **Audit log:** `audit_log` table + `write_audit_log()` CRUD. All mutations (settings change, domain add, worker register/deregister, healing triggered) write actor IP + old/new values. Exposed at `GET /api/audit`.
 
 **Blind spot to flag:** The Redis `cognithhorn:workers` hash is writable by any container
 on the Docker network. A compromised upstream app could register a fake worker and

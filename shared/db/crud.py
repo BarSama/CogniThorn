@@ -6,6 +6,7 @@ from sqlalchemy import desc, func, insert, select, update
 
 from shared.db.database import get_conn
 from shared.db.models import (
+    audit_log_table,
     domains_table,
     incidents,
     settings_table,
@@ -161,29 +162,44 @@ async def upsert_domain(d: DomainCreate) -> None:
 
 
 async def get_domain(fqdn: str):
+    from shared.crypto import decrypt_pem
     async with get_conn() as conn:
         result = await conn.execute(
             select(domains_table).where(domains_table.c.fqdn == fqdn)
         )
-        return result.mappings().first()
+        row = result.mappings().first()
+        if row is None:
+            return None
+        # Decrypt key_pem transparently — callers never see raw ciphertext
+        row = dict(row)
+        row["key_pem"] = decrypt_pem(row.get("key_pem"))
+        return row
 
 
 async def get_all_domains() -> list:
+    from shared.crypto import decrypt_pem
     async with get_conn() as conn:
         result = await conn.execute(select(domains_table))
-        return result.mappings().all()
+        rows = result.mappings().all()
+        # Decrypt key_pem on each row; suppress key material in list responses
+        # by returning None — full key only available via get_domain(fqdn)
+        return [
+            {**dict(r), "key_pem": None}
+            for r in rows
+        ]
 
 
 async def update_domain_cert(
     fqdn: str, cert_pem: str, key_pem: str, expires_at: datetime
 ) -> None:
+    from shared.crypto import encrypt_pem
     async with get_conn() as conn:
         await conn.execute(
             update(domains_table)
             .where(domains_table.c.fqdn == fqdn)
             .values(
                 cert_pem=cert_pem,
-                key_pem=key_pem,
+                key_pem=encrypt_pem(key_pem),   # encrypted before hitting DB
                 acme_status="issued",
                 issued_at=func.now(),
                 expires_at=expires_at,
@@ -200,3 +216,54 @@ async def update_domain_acme_status(fqdn: str, status: str) -> None:
             .values(acme_status=status)
         )
         await conn.commit()
+
+
+# ── Audit Log ──────────────────────────────────────────────────────────────
+
+
+async def write_audit_log(
+    actor: str,
+    action: str,
+    resource: str | None = None,
+    detail: dict | None = None,
+) -> None:
+    """
+    Write one audit log entry. Called on every mutating API action.
+
+    Parameters
+    ----------
+    actor    : IP address (or "system") of whoever triggered the action
+    action   : dot-notation string, e.g. "settings.update", "domain.add"
+    resource : the specific key/fqdn/worker_id being changed (for quick search)
+    detail   : any additional context — e.g. {"old": "0.7", "new": "0.5"}
+
+    Why we don't raise on failure: an audit write failure must never block
+    the actual API response. We log the error and continue.
+    """
+    try:
+        async with get_conn() as conn:
+            await conn.execute(
+                insert(audit_log_table).values(
+                    actor=actor,
+                    action=action,
+                    resource=resource,
+                    detail=detail or {},
+                )
+            )
+            await conn.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(
+            "Failed to write audit log (action=%s): %s", action, e
+        )
+
+
+async def get_audit_log(limit: int = 100, offset: int = 0) -> list:
+    async with get_conn() as conn:
+        result = await conn.execute(
+            select(audit_log_table)
+            .order_by(desc(audit_log_table.c.created_at))
+            .limit(limit)
+            .offset(offset)
+        )
+        return result.mappings().all()

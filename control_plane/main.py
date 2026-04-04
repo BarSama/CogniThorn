@@ -10,6 +10,8 @@ from control_plane.api.settings_api import router as settings_router
 from control_plane.api.workers_api import router as workers_router
 from control_plane.api.domains_api import router as domains_router
 from control_plane.api.healing_api import router as healing_router
+from control_plane.api.audit_api import router as audit_router
+from control_plane.api.auth import APIKeyMiddleware
 from control_plane.registry.health_checker import run_health_checks
 from shared.db.database import run_migrations
 from shared.db.setup import seed_default_settings
@@ -18,11 +20,15 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="CogniThorn Control Plane", version="0.1.0")
 
+# Auth middleware — must be added before routers so it runs first
+app.add_middleware(APIKeyMiddleware)
+
 app.include_router(incidents_router)
 app.include_router(settings_router)
 app.include_router(workers_router)
 app.include_router(domains_router)
 app.include_router(healing_router)
+app.include_router(audit_router)
 
 
 @app.on_event("startup")

@@ -6,6 +6,7 @@ import os
 st.header("🕵️ Incident Lab")
 
 API_URL = os.getenv("CONTROL_PLANE_URL", "http://localhost:8090")
+_HEADERS = {"X-API-Key": os.getenv("CONTROL_PLANE_API_KEY", "")}
 
 
 @st.cache_data(ttl=5)
@@ -14,7 +15,8 @@ def fetch_incidents(attack_type=None):
         params = {"limit": 100}
         if attack_type:
             params["attack_type"] = attack_type
-        resp = httpx.get(f"{API_URL}/api/incidents", params=params, timeout=5)
+        resp = httpx.get(f"{API_URL}/api/incidents", params=params,
+                         headers=_HEADERS, timeout=5)
         return resp.json()
     except Exception as e:
         st.error(f"Failed to fetch incidents: {e}")
@@ -23,7 +25,8 @@ def fetch_incidents(attack_type=None):
 
 def heal_incident(incident_id: int):
     try:
-        resp = httpx.post(f"{API_URL}/api/incidents/{incident_id}/heal", timeout=5)
+        resp = httpx.post(f"{API_URL}/api/incidents/{incident_id}/heal",
+                          headers=_HEADERS, timeout=5)
         if resp.status_code == 200:
             st.success("Self-healing triggered! A GitHub PR will be created shortly.")
         else:

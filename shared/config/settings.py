@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     certs_dir: str = "/certs"
     enable_self_healing: bool = False
     log_level: str = "INFO"
+    # Security: API key for the control plane management API.
+    # Set to a random secret (e.g. `openssl rand -hex 32`).
+    # If empty, auth is skipped with a WARNING — dev-only.
+    control_plane_api_key: str = ""
+    # Security: 32-byte base64 key for encrypting TLS private keys at rest.
+    # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # If empty, key_pem is stored plaintext with a WARNING.
+    key_encryption_secret: str = ""
 
     @model_validator(mode="after")
     def _set_worker_id(self) -> "Settings":

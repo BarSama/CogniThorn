@@ -6,12 +6,13 @@ import os
 st.header("⚙️ Configuration")
 
 API_URL = os.getenv("CONTROL_PLANE_URL", "http://localhost:8090")
+_HEADERS = {"X-API-Key": os.getenv("CONTROL_PLANE_API_KEY", "")}
 
 
 @st.cache_data(ttl=5)
 def fetch_settings():
     try:
-        resp = httpx.get(f"{API_URL}/api/settings", timeout=5)
+        resp = httpx.get(f"{API_URL}/api/settings", headers=_HEADERS, timeout=5)
         return resp.json()
     except Exception:
         return {}
@@ -20,7 +21,7 @@ def fetch_settings():
 @st.cache_data(ttl=5)
 def fetch_workers():
     try:
-        resp = httpx.get(f"{API_URL}/api/workers", timeout=5)
+        resp = httpx.get(f"{API_URL}/api/workers", headers=_HEADERS, timeout=5)
         return resp.json()
     except Exception:
         return []
@@ -43,7 +44,7 @@ if st.button("Save Settings"):
         resp = httpx.put(f"{API_URL}/api/settings", json={
             "sensitivity_threshold": str(threshold),
             "enable_self_healing": str(healing).lower(),
-        }, timeout=5)
+        }, headers=_HEADERS, timeout=5)
         st.success("Settings saved and broadcast to all workers.")
         st.cache_data.clear()
     except Exception as e:
@@ -63,7 +64,8 @@ with st.form("api_keys"):
         if github_repo:
             updates["github_repo"] = github_repo
         if updates:
-            httpx.put(f"{API_URL}/api/settings", json=updates, timeout=5)
+            httpx.put(f"{API_URL}/api/settings", json=updates,
+                      headers=_HEADERS, timeout=5)
             st.success("Keys saved.")
 
 st.subheader("Active Workers")

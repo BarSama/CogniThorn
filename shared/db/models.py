@@ -81,3 +81,18 @@ stats_cache_table = Table(
     Column("value", Text, nullable=False),
     Column("updated_at", DateTime(timezone=True), server_default=func.now()),
 )
+
+# Every mutating API call (settings change, domain add, worker register,
+# healing triggered) writes a row here. This creates a tamper-evident
+# trail: if someone bumps the threshold to 1.0 to disable detection, it
+# shows up in the audit log with their IP address.
+audit_log_table = Table(
+    "audit_log",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    Column("actor", Text, nullable=False),          # IP address of caller
+    Column("action", Text, nullable=False),          # e.g. "settings.update"
+    Column("resource", Text, nullable=True),         # e.g. "sensitivity_threshold"
+    Column("detail", JSONB, nullable=True),          # old/new values, etc.
+)

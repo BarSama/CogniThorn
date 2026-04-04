@@ -1,6 +1,6 @@
 import json
-from fastapi import APIRouter, HTTPException
-from shared.db.crud import upsert_domain, get_all_domains, get_domain
+from fastapi import APIRouter, HTTPException, Request
+from shared.db.crud import upsert_domain, get_all_domains, get_domain, write_audit_log
 from shared.schemas import DomainCreate
 from shared.redis_client import get_redis
 
@@ -14,13 +14,19 @@ async def list_domains():
 
 
 @router.post("")
-async def add_domain(d: DomainCreate):
+async def add_domain(d: DomainCreate, request: Request):
+    # DomainCreate.block_ssrf validator already ran — upstream_url is safe
     await upsert_domain(d)
-    # Publish to Redis for SSL Gateway to pick up
     redis = get_redis()
     await redis.hset(
         f"cognithhorn:domain:{d.fqdn}",
         mapping={"upstream_url": d.upstream_url, "acme_status": "pending"},
+    )
+    await write_audit_log(
+        actor=request.client.host if request.client else "unknown",
+        action="domain.add",
+        resource=d.fqdn,
+        detail={"upstream_url": d.upstream_url},
     )
     return {"fqdn": d.fqdn, "status": "pending_cert"}
 
