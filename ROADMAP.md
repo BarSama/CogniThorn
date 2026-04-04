@@ -16,8 +16,8 @@ The full codebase skeleton is written and pushed:
 - `docker-compose.yml` — full HA stack (PostgreSQL + Redis Sentinel + PgBouncer)
 
 **Known open issues before Phase 1:**
-- [ ] SSL Gateway HTTPS SNI wiring needs verification against uvicorn's SSL API
-- [ ] No tests exist yet — detection behaviour is unverified
+- [x] SSL Gateway HTTPS SNI wiring needs verification against uvicorn's SSL API
+- [x] No tests exist yet — detection behaviour is unverified
 - [ ] Control plane API has no authentication (any caller can change settings)
 - [ ] `download_model.py` downloads a generic DistilBERT, not a WAF-specific model
 
@@ -29,14 +29,14 @@ The full codebase skeleton is written and pushed:
 > **Why first:** You cannot trust any other phase until you can reliably start the stack,
 > send a request, and confirm it was inspected. Everything else is built on this.
 
-- [ ] Fix SSL Gateway HTTPS server SNI context wiring
-- [ ] Write `tests/` suite:
-  - [ ] `test_guard.py` — ONNX scores SQLi/XSS payloads above threshold, clean requests below
-  - [ ] `test_analyst.py` — Gemini integration with mocked API responses
-  - [ ] `test_proxy.py` — full middleware flow: block path and pass-through path
-  - [ ] `test_db.py` — `log_incident_blocked` writes to DB; `increment_clean_counters` does not
-  - [ ] `test_worker_router.py` — round-robin selection, worker failover on 502
-- [ ] Add `pytest` + `pytest-asyncio` + `respx` (httpx mocker) to dev requirements
+- [x] Fix SSL Gateway HTTPS server SNI context wiring
+- [x] Write `tests/` suite:
+  - [x] `test_guard.py` — ONNX scores SQLi/XSS payloads above threshold, clean requests below
+  - [x] `test_analyst.py` — Gemini integration with mocked API responses
+  - [x] `test_proxy.py` — full middleware flow: block path and pass-through path
+  - [x] `test_db.py` — `log_incident_blocked` writes to DB; `increment_clean_counters` does not
+  - [x] `test_worker_router.py` — round-robin selection, worker failover on 502
+- [x] Add `pytest` + `pytest-asyncio` + `respx` (httpx mocker) to dev requirements (`requirements-dev.txt`)
 - [ ] End-to-end smoke test: `docker compose up` → send SQLi → verify 403 → check dashboard
 - [ ] Confirm `docker compose up --scale waf-worker=3` registers 3 workers at `/api/workers`
 - [ ] CI: add GitHub Actions workflow that runs tests on every push

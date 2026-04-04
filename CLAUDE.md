@@ -150,7 +150,8 @@ curl -X POST http://localhost/login \
 - [x] `ssl_gateway/` — TLS termination + ACME + worker routing
 - [x] `docker-compose.yml` — full HA stack
 - [x] `README.md`
-- [ ] Tests
+- [x] Tests (`tests/` — guard, analyst, proxy middleware, DB CRUD, worker router)
+- [x] SSL Gateway SNI wiring fix
 - [ ] End-to-end smoke test with a real upstream app
 
 ---
