@@ -3,6 +3,8 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
+from dataclasses import dataclass, field
 
 import google.generativeai as genai
 
@@ -25,16 +27,102 @@ Analyze the request and respond ONLY with valid JSON matching this exact schema:
 Do not include any text outside the JSON object."""
 
 
+# ── Circuit Breaker ────────────────────────────────────────────────────────────
+#
+# What is a circuit breaker?
+# Named after the electrical version: normally current flows freely (closed).
+# When something goes wrong, the breaker trips (opens) and stops all current
+# until the problem is fixed. In software:
+#   CLOSED  → normal — Gemini calls go through
+#   OPEN    → broken — Gemini calls are skipped; fail-open immediately
+#   HALF-OPEN → trial — one request is allowed through to test if Gemini recovered
+#
+# Why 3 strikes and 60 seconds?
+# 3 consecutive failures is enough signal that Gemini is having trouble (not just
+# one flaky request). 60 seconds lets the API recover before we retry. These
+# values are configurable; adjust based on your Gemini SLA and traffic patterns.
+#
+# Blind spot for learners: this circuit breaker is in-process (one per worker).
+# If you have 5 WAF workers, each has its own counter. Worker 1 might open its
+# circuit while Worker 2 is still hammering Gemini. A shared Redis-based circuit
+# breaker (store failure count in Redis) would coordinate all workers. That's a
+# Phase 5/6 improvement.
+
+@dataclass
+class _CircuitBreaker:
+    failures: int = 0
+    state: str = "closed"   # closed | open | half-open
+    opened_at: float = 0.0
+    THRESHOLD: int = 3
+    RESET_TIMEOUT: float = 60.0
+
+    def record_success(self) -> None:
+        if self.state != "closed":
+            logger.info("Gemini circuit breaker CLOSED — API recovered")
+        self.failures = 0
+        self.state = "closed"
+
+    def record_failure(self) -> None:
+        self.failures += 1
+        if self.failures >= self.THRESHOLD and self.state == "closed":
+            self.state = "open"
+            self.opened_at = time.monotonic()
+            logger.critical(
+                "Gemini circuit breaker OPENED after %d consecutive failures. "
+                "All requests will fail-open for %ds.",
+                self.failures, int(self.RESET_TIMEOUT),
+            )
+
+    def allow_request(self) -> bool:
+        """Return True if a Gemini request should be allowed through."""
+        if self.state == "closed":
+            return True
+        if self.state == "open":
+            elapsed = time.monotonic() - self.opened_at
+            if elapsed > self.RESET_TIMEOUT:
+                self.state = "half-open"
+                logger.warning("Gemini circuit breaker entering HALF-OPEN — testing one request")
+                return True   # allow one trial request
+            return False      # still open
+        # half-open: allow through (trial request)
+        return True
+
+
+_breaker = _CircuitBreaker()
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
 def _make_payload_hash(ctx: RequestContext) -> str:
     """SHA-256 of the normalized suspicious content for Redis cache key."""
     content = f"{ctx.method}:{ctx.path}:{ctx.query_string}:{ctx.body[:512]}"
     return hashlib.sha256(content.encode()).hexdigest()
 
 
+def _fail_open_verdict(reason: str) -> Verdict:
+    return Verdict(
+        is_attack=False,
+        attack_type="none",
+        confidence=0.0,
+        explanation=reason,
+    )
+
+
+async def _increment_fail_open(redis) -> None:
+    try:
+        await redis.incr("cognithhorn:stats:fail_open_count")
+        await redis.expire("cognithhorn:stats:fail_open_count", 600)
+    except Exception:
+        pass
+
+
+# ── Main analysis function ────────────────────────────────────────────────────
+
 async def analyze(ctx: RequestContext) -> Verdict:
     """
     Analyze a suspicious request using Gemini Flash.
     Checks Redis cache first. On Gemini timeout or error, fails open.
+    Circuit breaker prevents hammering a degraded API.
     """
     cache_key = f"cognithhorn:analysis:{_make_payload_hash(ctx)}"
     redis = get_redis()
@@ -48,6 +136,14 @@ async def analyze(ctx: RequestContext) -> Verdict:
             return Verdict(**data, from_cache=True)
     except Exception as e:
         logger.warning("Redis cache read failed: %s", e)
+
+    # --- Circuit breaker check ---
+    if not _breaker.allow_request():
+        logger.warning(
+            "Gemini circuit breaker is OPEN — failing open for %s %s", ctx.method, ctx.path
+        )
+        await _increment_fail_open(redis)
+        return _fail_open_verdict("Gemini circuit breaker open — request passed (fail-open policy)")
 
     # --- Gemini API call ---
     try:
@@ -67,7 +163,8 @@ async def analyze(ctx: RequestContext) -> Verdict:
             f"USER-AGENT: {ctx.user_agent or 'unknown'}\n"
             f"BODY:\n{ctx.body[:2048]}"
         )
-        # Retry with exponential backoff on 429
+        # Retry with exponential backoff on 429 (rate limit)
+        # 429 is NOT a circuit-breaker failure — it means Gemini is up but busy.
         for attempt in range(3):
             try:
                 response = await asyncio.wait_for(
@@ -88,6 +185,9 @@ async def analyze(ctx: RequestContext) -> Verdict:
         data = json.loads(response.text)
         verdict = Verdict(**data)
 
+        # Success — close circuit if it was half-open
+        _breaker.record_success()
+
         # --- Cache the result ---
         try:
             ttl = int(await redis.get("cognithhorn:settings:analysis_cache_ttl") or 86400)
@@ -99,28 +199,16 @@ async def analyze(ctx: RequestContext) -> Verdict:
 
     except asyncio.TimeoutError:
         logger.critical("Gemini timeout (>5s) — failing open for %s %s", ctx.method, ctx.path)
+        _breaker.record_failure()
         await _increment_fail_open(redis)
-        return Verdict(
-            is_attack=False,
-            attack_type="none",
-            confidence=0.0,
-            explanation="AI analysis timed out — request passed (fail-open policy)",
-        )
+        return _fail_open_verdict("AI analysis timed out — request passed (fail-open policy)")
+
     except Exception as exc:
         logger.critical("Gemini analysis failed — failing open: %s", exc, exc_info=True)
+        # Only count as circuit-breaker failure if it looks like a 5xx server error
+        err_str = str(exc)
+        if any(code in err_str for code in ("500", "502", "503", "504")):
+            _breaker.record_failure()
         await _increment_fail_open(redis)
-        return Verdict(
-            is_attack=False,
-            attack_type="none",
-            confidence=0.0,
-            explanation=f"AI analysis error — request passed (fail-open policy)",
-        )
+        return _fail_open_verdict("AI analysis error — request passed (fail-open policy)")
 
-
-async def _increment_fail_open(redis) -> None:
-    try:
-        await redis.incr("cognithhorn:stats:fail_open_count")
-        # expire after 10 minutes so the alert auto-clears
-        await redis.expire("cognithhorn:stats:fail_open_count", 600)
-    except Exception:
-        pass

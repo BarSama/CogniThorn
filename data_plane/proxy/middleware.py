@@ -64,13 +64,26 @@ async def _get_threshold() -> float:
 
 
 async def _increment_counters(false_positive: bool = False) -> None:
+    """
+    Increment Redis stats counters using a pipeline.
+
+    Why a pipeline?
+    Each individual INCR is a round-trip to Redis (~0.3–0.5ms on localhost,
+    more on a real network). At 1000 req/s with 2 INCRs each = 2000 round-trips
+    per second = up to 1 full second of Redis latency per second.
+    A pipeline batches all commands into one round-trip regardless of count.
+    `transaction=False` means no MULTI/EXEC wrapper — pure command batching,
+    which is safe for non-atomic counter increments.
+    """
     try:
         redis = get_redis()
-        await redis.incr("cognithhorn:stats:requests_total")
-        if false_positive:
-            await redis.incr("cognithhorn:stats:false_positives_total")
-        else:
-            await redis.incr("cognithhorn:stats:requests_clean")
+        async with redis.pipeline(transaction=False) as pipe:
+            pipe.incr("cognithhorn:stats:requests_total")
+            if false_positive:
+                pipe.incr("cognithhorn:stats:false_positives_total")
+            else:
+                pipe.incr("cognithhorn:stats:requests_clean")
+            await pipe.execute()
     except Exception as e:
         logger.debug("Counter increment failed: %s", e)
 
@@ -78,8 +91,10 @@ async def _increment_counters(false_positive: bool = False) -> None:
 async def _log_blocked(ctx, guard_score: float, verdict) -> None:
     try:
         redis = get_redis()
-        await redis.incr("cognithhorn:stats:requests_total")
-        await redis.incr("cognithhorn:stats:requests_blocked")
+        async with redis.pipeline(transaction=False) as pipe:
+            pipe.incr("cognithhorn:stats:requests_total")
+            pipe.incr("cognithhorn:stats:requests_blocked")
+            await pipe.execute()
 
         inc = IncidentCreate(
             request_id=ctx.request_id,

@@ -1,5 +1,6 @@
 """CogniThorn WAF Worker — Data Plane entry point."""
 import asyncio
+import json
 import logging
 
 from fastapi import FastAPI
@@ -17,6 +18,11 @@ app = FastAPI(title="CogniThorn WAF Worker", docs_url=None, redoc_url=None)
 
 # Attach WAF middleware (processes every request)
 app.add_middleware(WAFMiddleware)
+
+# Grace period after marking as draining before process exits.
+# Long enough for the SSL Gateway to notice the "draining" status (~100ms pub/sub
+# propagation) plus the longest expected in-flight request.
+_DRAIN_SECONDS = 8
 
 
 @app.on_event("startup")
@@ -44,7 +50,51 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
-    asyncio.create_task(registration.deregister())
+    """
+    Graceful shutdown sequence:
+
+    1. Mark this worker as "draining" in the Redis routing table.
+       The SSL Gateway reads this on every request selection — within one
+       round-trip (~100ms) it will stop sending new traffic here.
+
+    2. Sleep for _DRAIN_SECONDS to let in-flight requests complete.
+       Without this sleep, a request that was routed to us 10ms ago would
+       receive a connection reset mid-response instead of a clean reply.
+
+    3. Deregister from the control plane HTTP API (updates the DB).
+       This is best-effort — if the control plane is also shutting down,
+       the health checker will eventually clean up stale workers.
+
+    Why we don't track in-flight count:
+    Counting in-flight requests requires thread-safe atomics around every
+    request entry/exit. For the typical rolling restart case (Docker scale-down
+    during low traffic), an 8-second sleep achieves the same result more simply.
+    For high-traffic deployments, replace the sleep with a real in-flight counter.
+    """
+    # Step 1: update Redis routing entry to "draining"
+    try:
+        from shared.redis_client import get_redis
+        redis = get_redis()
+        raw = await redis.hget("cognithhorn:workers", settings.worker_id)
+        if raw:
+            data = json.loads(raw)
+            data["status"] = "draining"
+            await redis.hset(
+                "cognithhorn:workers",
+                settings.worker_id,
+                json.dumps(data),
+            )
+        logger.info("Worker %s marked as draining — stopping new traffic", settings.worker_id)
+    except Exception as e:
+        logger.warning("Could not mark worker as draining in Redis: %s", e)
+
+    # Step 2: drain window
+    logger.info("Draining in-flight requests (%ds window)...", _DRAIN_SECONDS)
+    await asyncio.sleep(_DRAIN_SECONDS)
+
+    # Step 3: deregister from control plane (best-effort)
+    await registration.deregister()
+    logger.info("WAF worker %s shutdown complete", settings.worker_id)
 
 
 @app.get("/health")
